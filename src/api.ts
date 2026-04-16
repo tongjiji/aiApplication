@@ -2,6 +2,15 @@ import type { Message } from './types'
 
 const BACKEND_API_BASE_URL = import.meta.env.VITE_BACKEND_API_BASE_URL ?? 'http://localhost:3000/api'
 
+function getApiRoot(baseUrl: string): string {
+  const cleaned = baseUrl.replace(/\/+$/, '')
+  // 兼容误配成 /api/api 的情况
+  const normalized = cleaned.replace(/\/api\/api\/?$/, '/api')
+  return normalized.endsWith('/api') ? normalized : `${normalized}/api`
+}
+
+const API_ROOT = getApiRoot(BACKEND_API_BASE_URL)
+
 type ImageSize = '1024x1024' | '1024x768' | '768x1024'
 type ImageStyle =
   | 'realistic'
@@ -43,7 +52,7 @@ export async function streamChatCompletion(
   messages: Message[],
   onToken: (token: string) => void,
 ): Promise<void> {
-  const response = await fetch(`${BACKEND_API_BASE_URL}/chat/completions`, {
+  const response = await fetch(`${API_ROOT}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -53,7 +62,7 @@ export async function streamChatCompletion(
         role: message.role,
         content: message.content,
       })),
-      stream: true
+      stream: true,
     }),
   })
 
@@ -121,7 +130,7 @@ export async function streamChatCompletion(
 }
 
 export async function generateImage(params: GenerateImageParams): Promise<string> {
-  const response = await fetch(`${BACKEND_API_BASE_URL}/image/generate`, {
+  const response = await fetch(`${API_ROOT}/image/generate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -148,7 +157,7 @@ export async function generateImage(params: GenerateImageParams): Promise<string
 }
 
 export async function optimizeImagePrompt(params: GenerateImageParams): Promise<string> {
-  const response = await fetch(`${BACKEND_API_BASE_URL}/image/optimize-prompt`, {
+  const response = await fetch(`${API_ROOT}/image/optimize-prompt`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
