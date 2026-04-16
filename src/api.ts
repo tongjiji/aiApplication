@@ -1,22 +1,6 @@
 import type { Message } from './types'
 
-const ZHIPU_API_BASE_URL =
-  import.meta.env.VITE_ZHIPU_API_BASE_URL ?? 'https://open.bigmodel.cn/api/paas/v4'
-const ZHIPU_API_KEY = import.meta.env.VITE_ZHIPU_API_KEY
-const ZHIPU_CHAT_MODEL = import.meta.env.VITE_ZHIPU_CHAT_MODEL ?? 'glm-4-flash'
-const ZHIPU_IMAGE_MODEL = import.meta.env.VITE_ZHIPU_IMAGE_MODEL ?? 'cogview-3-flash'
-
-interface ZhipuDelta {
-  content?: string
-}
-
-interface ZhipuChoice {
-  delta?: ZhipuDelta
-}
-
-interface ZhipuChatStreamChunk {
-  choices?: ZhipuChoice[]
-}
+const BACKEND_API_BASE_URL = import.meta.env.VITE_BACKEND_API_BASE_URL ?? 'http://localhost:3000/api'
 
 type ImageSize = '1024x1024' | '1024x768' | '768x1024'
 type ImageStyle =
@@ -28,29 +12,6 @@ type ImageStyle =
   | 'pixel-art'
   | '3d-cartoon'
   | 'ink-sketch'
-type ApiImageStyle = 'realistic' | 'anime'
-
-const IMAGE_STYLE_LABELS: Record<ImageStyle, string> = {
-  realistic: '写实',
-  anime: '动漫',
-  watercolor: '水彩',
-  'oil-painting': '油画',
-  cyberpunk: '赛博朋克',
-  'pixel-art': '像素风',
-  '3d-cartoon': '3D 卡通',
-  'ink-sketch': '水墨素描',
-}
-
-function getApiImageStyle(style: ImageStyle): ApiImageStyle {
-  switch (style) {
-    case 'anime':
-    case 'pixel-art':
-    case '3d-cartoon':
-      return 'anime'
-    default:
-      return 'realistic'
-  }
-}
 
 interface GenerateImageParams {
   prompt: string
@@ -58,103 +19,117 @@ interface GenerateImageParams {
   style: ImageStyle
 }
 
-interface ZhipuImageItem {
-  url?: string
+interface ZhipuDelta {
+  content?: string
 }
 
-interface ZhipuImageResponse {
-  data?: ZhipuImageItem[]
-}
-
-interface ZhipuChatCompletionChoice {
+interface ZhipuChoice {
+  delta?: ZhipuDelta
+  finish_reason?: string
   message?: {
     content?: string
   }
 }
 
-interface ZhipuChatCompletionResponse {
-  choices?: ZhipuChatCompletionChoice[]
+interface ZhipuChatStreamChunk {
+  choices?: ZhipuChoice[]
+}
+
+interface ZhipuChatResponse {
+  choices?: ZhipuChoice[]
 }
 
 export async function streamChatCompletion(
   messages: Message[],
   onToken: (token: string) => void,
 ): Promise<void> {
-  if (!ZHIPU_API_KEY) {
-    throw new Error('缺少环境变量 VITE_ZHIPU_API_KEY，请先在 .env 中配置。')
-  }
-
-  const response = await fetch(`${ZHIPU_API_BASE_URL}/chat/completions`, {
+  const response = await fetch(`${BACKEND_API_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${ZHIPU_API_KEY}`,
     },
     body: JSON.stringify({
-      model: ZHIPU_CHAT_MODEL,
-      stream: true,
       messages: messages.map((message) => ({
         role: message.role,
         content: message.content,
       })),
+      stream: true
     }),
   })
 
   if (!response.ok) {
     const errorText = await response.text()
-    throw new Error(`智谱 API 请求失败（${response.status}）：${errorText}`)
+    throw new Error(`后端 API 请求失败（${response.status}）：${errorText}`)
   }
 
-  if (!response.body) {
-    throw new Error('未获取到流式响应数据。')
-  }
+  // 检查响应类型
+  const contentType = response.headers.get('content-type')
+  
+  if (contentType?.includes('text/event-stream')) {
+    // 处理流式响应
+    if (!response.body) {
+      throw new Error('未获取到流式响应数据。')
+    }
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let buffer = ''
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
 
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
-
-    for (const rawLine of lines) {
-      const line = rawLine.trim()
-      if (!line.startsWith('data:')) continue
-
-      const data = line.slice(5).trim()
-      if (!data || data === '[DONE]') continue
-
+    const parsePayload = (payload: string) => {
+      if (!payload || payload === '[DONE]') return
       try {
-        const chunk = JSON.parse(data) as ZhipuChatStreamChunk
+        const chunk = JSON.parse(payload) as ZhipuChatStreamChunk
         const token = chunk.choices?.[0]?.delta?.content
         if (token) onToken(token)
       } catch {
         // Ignore malformed chunks from network boundaries.
       }
     }
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim()
+        if (!line) continue
+        if (line.startsWith('data:')) {
+          parsePayload(line.slice(5).trim())
+          continue
+        }
+        // 兼容后端或代理未按 SSE 包装、直接输出 JSON 行的情况。
+        if (line.startsWith('{')) {
+          parsePayload(line)
+        }
+      }
+    }
+  } else {
+    // 处理非流式响应
+    const data = await response.json() as ZhipuChatResponse
+    const content = data.choices?.[0]?.message?.content
+    if (!content) {
+      throw new Error('未获取到响应内容。')
+    }
+
+    // 直接一次性输出，避免DOM操作冲突
+    onToken(content)
   }
 }
 
 export async function generateImage(params: GenerateImageParams): Promise<string> {
-  if (!ZHIPU_API_KEY) {
-    throw new Error('缺少环境变量 VITE_ZHIPU_API_KEY，请先在 .env 中配置。')
-  }
-
-  const response = await fetch(`${ZHIPU_API_BASE_URL}/images/generations`, {
+  const response = await fetch(`${BACKEND_API_BASE_URL}/image/generate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${ZHIPU_API_KEY}`,
     },
     body: JSON.stringify({
-      model: ZHIPU_IMAGE_MODEL,
       prompt: params.prompt,
       size: params.size,
-      style: getApiImageStyle(params.style),
+      style: params.style,
     }),
   })
 
@@ -163,7 +138,7 @@ export async function generateImage(params: GenerateImageParams): Promise<string
     throw new Error(`图片生成失败（${response.status}）：${errorText}`)
   }
 
-  const payload = (await response.json()) as ZhipuImageResponse
+  const payload = await response.json()
   const imageUrl = payload.data?.[0]?.url
   if (!imageUrl) {
     throw new Error('未获取到有效图片地址。')
@@ -173,27 +148,15 @@ export async function generateImage(params: GenerateImageParams): Promise<string
 }
 
 export async function optimizeImagePrompt(params: GenerateImageParams): Promise<string> {
-  if (!ZHIPU_API_KEY) {
-    throw new Error('缺少环境变量 VITE_ZHIPU_API_KEY，请先在 .env 中配置。')
-  }
-
-  const systemPrompt =
-    '你是专业的 AI 绘画提示词工程师。请把用户的简短描述扩展成高质量图片生成提示词。输出必须包含主体、风格、光线、色彩、构图细节，语言精炼，不要加解释，不要使用项目符号。'
-  const userPrompt = `原始描述：${params.prompt}\n目标尺寸：${params.size}\n风格偏好：${IMAGE_STYLE_LABELS[params.style]}`
-
-  const response = await fetch(`${ZHIPU_API_BASE_URL}/chat/completions`, {
+  const response = await fetch(`${BACKEND_API_BASE_URL}/image/optimize-prompt`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${ZHIPU_API_KEY}`,
     },
     body: JSON.stringify({
-      model: ZHIPU_CHAT_MODEL,
-      stream: false,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
+      prompt: params.prompt,
+      size: params.size,
+      style: params.style,
     }),
   })
 
@@ -202,8 +165,8 @@ export async function optimizeImagePrompt(params: GenerateImageParams): Promise<
     throw new Error(`提示词优化失败（${response.status}）：${errorText}`)
   }
 
-  const payload = (await response.json()) as ZhipuChatCompletionResponse
-  const optimizedPrompt = payload.choices?.[0]?.message?.content?.trim()
+  const payload = await response.json()
+  const optimizedPrompt = payload.optimizedPrompt
   if (!optimizedPrompt) {
     throw new Error('未获取到优化后的提示词。')
   }

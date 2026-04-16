@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { generateImage, optimizeImagePrompt, streamChatCompletion } from '../api'
 import type { Message } from '../types'
 
@@ -17,6 +18,10 @@ const initialMessages: Message[] = [
 const CHAT_HISTORY_KEY = 'chatHistory'
 const CHAT_CONVERSATIONS_KEY = 'chatConversations'
 const IMAGE_HISTORY_KEY = 'imageHistory'
+const MAX_CONTEXT_MESSAGES = 20
+const MAX_CONTEXT_CHARS = 12000
+const MAX_STORED_CONVERSATIONS = 30
+const MAX_STORED_MESSAGES_PER_CONVERSATION = 80
 
 interface Conversation {
   id: string
@@ -146,6 +151,31 @@ function loadImageHistory(): GeneratedImage[] {
   }
 }
 
+function buildContextMessages(messages: Message[]): Message[] {
+  const latest = messages.slice(-MAX_CONTEXT_MESSAGES)
+  const reversed: Message[] = []
+  let totalChars = 0
+
+  for (let i = latest.length - 1; i >= 0; i -= 1) {
+    const message = latest[i]
+    const nextTotal = totalChars + message.content.length
+    if (reversed.length > 0 && nextTotal > MAX_CONTEXT_CHARS) {
+      break
+    }
+    reversed.push(message)
+    totalChars = nextTotal
+  }
+
+  return reversed.reverse()
+}
+
+function compactConversations(conversations: Conversation[]): Conversation[] {
+  return conversations.slice(0, MAX_STORED_CONVERSATIONS).map((conversation) => ({
+    ...conversation,
+    messages: conversation.messages.slice(-MAX_STORED_MESSAGES_PER_CONVERSATION),
+  }))
+}
+
 export default function ChatInterface() {
   const initialConversationsRef = useRef<Conversation[] | null>(null)
   if (initialConversationsRef.current === null) {
@@ -163,8 +193,6 @@ export default function ChatInterface() {
   const [streamingMessageId, setStreamingMessageId] = useState<number | null>(null)
   const [errorNotice, setErrorNotice] = useState('')
   const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null)
-  const [appPage, setAppPage] = useState<AppPage>('home')
-  const [isPageTransitioning, setIsPageTransitioning] = useState(false)
   const [imagePrompt, setImagePrompt] = useState('')
   const [imageSize, setImageSize] = useState<ImageSize>('1024x1024')
   const [imageStyle, setImageStyle] = useState<ImageStyle>('realistic')
@@ -173,6 +201,11 @@ export default function ChatInterface() {
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>(() => loadImageHistory())
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null)
   const messagesContainerRef = useRef<HTMLElement | null>(null)
+  const location = useLocation()
+  const navigate = useNavigate()
+  const appPage: AppPage =
+    location.pathname === '/chat' ? 'chat' : location.pathname === '/image' ? 'image' : 'home'
+  const isPageTransitioning = false
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
@@ -185,8 +218,20 @@ export default function ChatInterface() {
   )
 
   useEffect(() => {
-    localStorage.setItem(CHAT_CONVERSATIONS_KEY, JSON.stringify(conversations))
-    localStorage.removeItem(CHAT_HISTORY_KEY)
+    try {
+      localStorage.setItem(CHAT_CONVERSATIONS_KEY, JSON.stringify(conversations))
+      localStorage.removeItem(CHAT_HISTORY_KEY)
+    } catch {
+      // 避免 localStorage 超限导致页面报错，自动裁剪历史记录。
+      const compacted = compactConversations(conversations)
+      setConversations(compacted)
+      try {
+        localStorage.setItem(CHAT_CONVERSATIONS_KEY, JSON.stringify(compacted))
+        localStorage.removeItem(CHAT_HISTORY_KEY)
+      } catch {
+        setErrorNotice('聊天记录过长，已自动清理部分历史。')
+      }
+    }
   }, [conversations])
 
   useEffect(() => {
@@ -213,12 +258,9 @@ export default function ChatInterface() {
   }, [errorNotice])
 
   const navigateTo = (nextPage: AppPage) => {
-    if (nextPage === appPage) return
-    setIsPageTransitioning(true)
-    window.setTimeout(() => {
-      setAppPage(nextPage)
-      requestAnimationFrame(() => setIsPageTransitioning(false))
-    }, 140)
+    const targetPath = nextPage === 'home' ? '/' : `/${nextPage}`
+    if (location.pathname === targetPath) return
+    navigate(targetPath)
   }
 
   const handleSend = async () => {
@@ -236,7 +278,7 @@ export default function ChatInterface() {
       content: '',
       timestamp: Date.now() + 1,
     }
-    const historyMessages = [...activeConversation.messages, userMessage]
+    const historyMessages = buildContextMessages([...activeConversation.messages, userMessage])
 
     setConversations((prev) =>
       prev
@@ -270,7 +312,7 @@ export default function ChatInterface() {
                     ? { ...message, content: message.content + token }
                     : message,
                 ),
-                updatedAt: Date.now(),
+                // 避免更新updatedAt，防止对话列表重新排序
               },
           ),
         )
@@ -290,7 +332,7 @@ export default function ChatInterface() {
                   ? { ...message, content: `抱歉，暂时无法回答。\n\n错误信息：${errorMessage}` }
                   : message,
               ),
-              updatedAt: Date.now(),
+              // 避免更新updatedAt，防止对话列表重新排序
             },
         ),
       )
@@ -466,8 +508,8 @@ export default function ChatInterface() {
   }
 
   return (
-    <div className="flex h-screen w-full overflow-x-auto bg-zinc-950 text-zinc-100">
-      <div className="flex h-full w-[1200px] min-w-[1200px]">
+    <div className="h-screen w-full overflow-x-auto bg-zinc-950 text-zinc-100">
+      <div className="mx-auto flex h-full w-[1200px] min-w-[1200px]">
         <aside
           className={`flex flex-col border-r border-zinc-800 bg-zinc-900/80 transition-all duration-300 ${appPage === 'home' ? 'w-0 overflow-hidden opacity-0' : 'w-80 opacity-100'
             }`}
@@ -772,11 +814,11 @@ export default function ChatInterface() {
               <>
                 <main ref={messagesContainerRef} className="flex-1 overflow-y-auto bg-zinc-950 px-4 py-4">
                   <div className="space-y-3">
-                    {messages.map((message, index) => {
+                    {messages.map((message) => {
                       const isUser = message.role === 'user'
                       return (
                         <div
-                          key={`${message.timestamp}-${index}`}
+                          key={message.timestamp}
                           className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
                         >
                           <div
