@@ -66,7 +66,7 @@ export async function streamChatCompletion(
         role: message.role,
         content: message.content,
       })),
-      stream: false,
+      stream: true,
     }),
   })
 
