@@ -2,9 +2,11 @@ import type { Message } from './types'
 
 // 本地开发走 localhost:3000，生产/预览环境走同源 /api（由 vercel.json 反代到真实后端），避免 CORS。
 // 支持通过 VITE_BACKEND_API_BASE_URL 手动覆盖
+// 注意：Vite 的 import.meta.env.DEV 在 Vercel 上不可靠，改用 MODE 判断
+const isDev = import.meta.env.MODE === 'development'
 const BACKEND_API_BASE_URL =
   import.meta.env.VITE_BACKEND_API_BASE_URL ??
-  (import.meta.env.DEV ? 'http://localhost:3000/api' : '/api')
+  (isDev ? 'http://localhost:3000/api' : '/api')
 
 function getApiRoot(baseUrl: string): string {
   const cleaned = baseUrl.replace(/\/+$/, '')
