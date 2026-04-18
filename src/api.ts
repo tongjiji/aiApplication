@@ -1,10 +1,10 @@
 import type { Message } from './types'
 
-// 本地直连后端；Vercel 上建议走同源 /api（由 vercel.json 反代到真实后端），避免 CORS。
-// 在 Vercel 构建时一般会注入 import.meta.env.VERCEL
+// 本地开发走 localhost:3000，生产/预览环境走同源 /api（由 vercel.json 反代到真实后端），避免 CORS。
+// 支持通过 VITE_BACKEND_API_BASE_URL 手动覆盖
 const BACKEND_API_BASE_URL =
   import.meta.env.VITE_BACKEND_API_BASE_URL ??
-  (import.meta.env.VERCEL ? '/api' : 'http://localhost:3000/api')
+  (import.meta.env.DEV ? 'http://localhost:3000/api' : '/api')
 
 function getApiRoot(baseUrl: string): string {
   const cleaned = baseUrl.replace(/\/+$/, '')
