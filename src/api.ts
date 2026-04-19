@@ -3,7 +3,7 @@ import type { Message } from './types'
 // 本地开发设置 VITE_BACKEND_API_BASE_URL=http://localhost:3000/api
 // 生产环境直接请求后端，后端已配置 CORS
 const BACKEND_API_BASE_URL =
-  import.meta.env.VITE_BACKEND_API_BASE_URL ?? 'https://aibackend-pi.vercel.app'
+  import.meta.env.VITE_BACKEND_API_BASE_URL ?? 'https://api.tjysuperman.com'
 
 function getApiRoot(baseUrl: string): string {
   const cleaned = baseUrl.replace(/\/+$/, '')
